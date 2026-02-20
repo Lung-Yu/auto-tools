@@ -22,7 +22,7 @@ END_STATION   = "1000-臺北"
 PID           = "A115743862"
 NORMAL_QTY    = "1"  # overridden by --qty at runtime
 
-TARGET_DATES = ["2026/02/20", "2026/02/21", "2026/02/22"]
+TARGET_DATES = ["2026/02/21", "2026/02/22", "2026/02/23"]  # overridden by --dates at runtime
 
 # Check two 8-hour windows to cover the full day
 TIME_WINDOWS = [
@@ -290,6 +290,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="台鐵訂票可用性查詢")
     parser.add_argument("--qty", type=int, default=1, metavar="N",
                         help="查詢座位數 (default: 1)")
+    parser.add_argument("--dates", nargs="+", metavar="YYYY/MM/DD",
+                        help="指定查詢日期，可多個，空白分隔 (default: 腳本內預設)")
     parser.add_argument("--loop", action="store_true",
                         help="持續檢查直到 Ctrl+C")
     parser.add_argument("--interval", type=int, default=60, metavar="SECS",
@@ -297,6 +299,8 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     NORMAL_QTY = str(args.qty)  # update global
+    if args.dates:
+        TARGET_DATES = args.dates  # update global
 
     if args.loop:
         run_loop(args.interval)
