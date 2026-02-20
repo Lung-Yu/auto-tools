@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Taiwan Railway (台鐵) Train Availability Checker - Windows Compatible
+Taiwan Railway (台鐵) Train Availability Checker - Windows Version
 Target: 清水 → 臺北, dates: 2026/02/20, 2026/02/21, 2026/02/22
 """
 
@@ -13,7 +13,7 @@ from datetime import datetime
 import requests
 from bs4 import BeautifulSoup
 
-# --- Windows 通知支援 ---
+# --- Windows Notification Support ---
 try:
     from plyer import notification
     HAS_NOTIFY = True
@@ -27,10 +27,11 @@ QUERY_TRAIN = f"{BASE_URL}/tra-tip-web/tip/tip001/tip123/queryTrain"
 START_STATION = "2220-清水"
 END_STATION   = "1000-臺北"
 PID           = "A115743862"
-NORMAL_QTY    = "1"
+NORMAL_QTY    = "1"  # overridden by --qty at runtime
 
-TARGET_DATES = ["2026/02/21", "2026/02/22", "2026/02/23"]
+TARGET_DATES = ["2026/02/21", "2026/02/22", "2026/02/23"]  # overridden by --dates at runtime
 
+# Check two 8-hour windows to cover the full day
 TIME_WINDOWS = [
     ("06:00", "14:00"),
     ("14:00", "22:00"),
@@ -49,9 +50,9 @@ HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
+
 def win_notify(title, message):
-    """Windows 原生通知 (取代 Mac 的 osascript)"""
-    print(f"\n[通知] {title}: {message}")
+    """Windows native notification (replacing Mac osascript)."""
     if HAS_NOTIFY:
         try:
             notification.notify(
@@ -63,14 +64,16 @@ def win_notify(title, message):
         except Exception:
             pass
     else:
-        # 如果沒安裝 plyer，就發出系統嗶聲作為提醒
+        # Fallback to system beep if plyer is not installed
         import ctypes
         ctypes.windll.user32.MessageBeep(0)
 
+
 def get_form_tokens(session):
+    """GET the query page and extract CSRF + completeToken."""
     resp = session.get(QUERY_PAGE, headers=HEADERS, timeout=15)
     resp.raise_for_status()
-    # 自動適配解析器
+    # Use lxml if available, otherwise fallback to html.parser
     parser = "lxml" if "lxml" in sys.modules else "html.parser"
     soup = BeautifulSoup(resp.text, parser)
     form = soup.find("form", id="queryForm")
@@ -83,27 +86,28 @@ def get_form_tokens(session):
         token["value"] if token else "",
     )
 
+
 def build_form_data(csrf, complete_token, ride_date, start_time, end_time):
     train_types = ["11", "1", "2", "3", "4", "5"]
     data = [
-        ("_csrf",                                      csrf),
-        ("custIdTypeEnum",                             "PERSON_ID"),
-        ("pid",                                        PID),
-        ("tripType",                                   "ONEWAY"),
-        ("orderType",                                  "BY_TIME"),
-        ("ticketOrderParamList[0].tripNo",             "TRIP1"),
-        ("ticketOrderParamList[0].startStation",       START_STATION),
-        ("ticketOrderParamList[0].endStation",         END_STATION),
-        ("ticketOrderParamList[0].rideDate",           ride_date),
-        ("ticketOrderParamList[0].startOrEndTime",     "true"),
-        ("ticketOrderParamList[0].startTime",          start_time),
-        ("ticketOrderParamList[0].endTime",            end_time),
-        ("ticketOrderParamList[0].normalQty",          NORMAL_QTY),
-        ("ticketOrderParamList[0].wheelChairQty",      "0"),
-        ("ticketOrderParamList[0].parentChildQty",     "0"),
-        ("ticketOrderParamList[0].trainNoList[0]",     ""),
-        ("ticketOrderParamList[0].trainNoList[1]",     ""),
-        ("ticketOrderParamList[0].trainNoList[2]",     ""),
+        ("_csrf",                                       csrf),
+        ("custIdTypeEnum",                              "PERSON_ID"),
+        ("pid",                                         PID),
+        ("tripType",                                    "ONEWAY"),
+        ("orderType",                                   "BY_TIME"),
+        ("ticketOrderParamList[0].tripNo",              "TRIP1"),
+        ("ticketOrderParamList[0].startStation",        START_STATION),
+        ("ticketOrderParamList[0].endStation",          END_STATION),
+        ("ticketOrderParamList[0].rideDate",            ride_date),
+        ("ticketOrderParamList[0].startOrEndTime",      "true"),
+        ("ticketOrderParamList[0].startTime",           start_time),
+        ("ticketOrderParamList[0].endTime",             end_time),
+        ("ticketOrderParamList[0].normalQty",           NORMAL_QTY),
+        ("ticketOrderParamList[0].wheelChairQty",       "0"),
+        ("ticketOrderParamList[0].parentChildQty",      "0"),
+        ("ticketOrderParamList[0].trainNoList[0]",      ""),
+        ("ticketOrderParamList[0].trainNoList[1]",      ""),
+        ("ticketOrderParamList[0].trainNoList[2]",      ""),
     ]
     for t in train_types:
         data.append(("ticketOrderParamList[0].trainTypeList", t))
@@ -114,22 +118,26 @@ def build_form_data(csrf, complete_token, ride_date, start_time, end_time):
     ]
     return data
 
+
 def parse_trains(html):
-    # 自動適配解析器
+    # Use lxml if available, otherwise fallback to html.parser
     parser = "lxml" if "lxml" in sys.modules else "html.parser"
     soup = BeautifulSoup(html, parser)
     result = {"available": [], "sold_out": [], "no_seats_msg": False, "error_msgs": []}
 
+    # Detect "no seats" response
     page_text = soup.get_text(" ", strip=True)
     no_seat_keywords = ["均沒有空位", "查無可售座位", "無座位", "候補"]
     result["no_seats_msg"] = any(k in page_text for k in no_seat_keywords)
 
+    # Collect error/info messages
     skip_keywords = ["官方網站", "護照號碼", "未享法定", "切勿使用", "v3 驗證"]
     for tag in soup.find_all(class_=lambda c: c and any(x in (c if isinstance(c, str) else " ".join(c)) for x in ["mag-error", "mag-info", "alert-info"])):
         txt = tag.get_text(strip=True)
         if txt and not any(k in txt for k in skip_keywords):
             result["error_msgs"].append(txt)
 
+    # Parse train result rows
     rows = soup.find_all("tr")
     for row in rows:
         cells = row.find_all("td")
@@ -175,7 +183,9 @@ def parse_trains(html):
 
     return result
 
+
 def check_window(session, ride_date, start_time, end_time):
+    """Check one time window for one date. Returns parsed result dict."""
     csrf, complete_token = get_form_tokens(session)
     form_data = build_form_data(csrf, complete_token, ride_date, start_time, end_time)
     resp = session.post(
@@ -188,10 +198,12 @@ def check_window(session, ride_date, start_time, end_time):
     resp.raise_for_status()
     return parse_trains(resp.text)
 
+
 def check_date(session, ride_date):
+    """Check both time windows for a date. Print summary. Return available trains."""
     all_available = []
     all_sold_out  = []
-    
+
     for (t0, t1) in TIME_WINDOWS:
         try:
             r = check_window(session, ride_date, t0, t1)
@@ -210,12 +222,13 @@ def check_date(session, ride_date):
 
     return unique_available, all_sold_out
 
+
 def run_once():
     session = requests.Session()
     any_avail = False
 
     print(f"\n{'='*62}")
-    print(f"  台鐵 Availability Checker | {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  台鐵 Availability Checker  |  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     start_name = START_STATION.split("-", 1)[-1]
     end_name   = END_STATION.split("-", 1)[-1]
     print(f"  Route : {start_name} → {end_name}  (x{NORMAL_QTY} 座位)")
@@ -237,8 +250,9 @@ def run_once():
                 print(f"    車次 {t['no']:>5}  {t['type']:<4}  "
                       f"{t['dep']} → {t['arr']}  "
                       f"${t['price']}")
-            
-            trains_summary = "、".join(f"車次{t['no']} {t['dep']}出發" for t in avail)
+            trains_summary = "、".join(
+                f"車次{t['no']} {t['dep']}出發" for t in avail
+            )
             win_notify(
                 f"台鐵有票！{ride_date}",
                 f"{start_name}→{end_name} {ride_date}｜{trains_summary}"
@@ -253,7 +267,9 @@ def run_once():
         print("  *** TICKETS AVAILABLE — book now! ***")
     else:
         print("  No availability found on any target date.")
+    print()
     return any_avail
+
 
 def run_loop(interval_seconds=60):
     print(f"Continuous check every {interval_seconds}s — Ctrl+C to stop\n")
@@ -265,13 +281,18 @@ def run_loop(interval_seconds=60):
             print("\nStopped.")
             sys.exit(0)
 
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="台鐵訂票可用性查詢")
-    parser.add_argument("--qty", type=int, default=1, metavar="N", help="查詢座位數 (default: 1)")
-    parser.add_argument("--dates", nargs="+", metavar="YYYY/MM/DD", help="指定查詢日期 (default: 腳本內預設)")
-    parser.add_argument("--loop", action="store_true", help="持續檢查直到 Ctrl+C")
-    parser.add_argument("--interval", type=int, default=60, metavar="SECS", help="檢查間隔 (default: 60)")
+    parser.add_argument("--qty", type=int, default=1, metavar="N",
+                        help="查詢座位數 (default: 1)")
+    parser.add_argument("--dates", nargs="+", metavar="YYYY/MM/DD",
+                        help="指定查詢日期，可多個，空白分隔 (default: 腳本內預設)")
+    parser.add_argument("--loop", action="store_true",
+                        help="持續檢查直到 Ctrl+C")
+    parser.add_argument("--interval", type=int, default=60, metavar="SECS",
+                        help="持續檢查間隔秒數 (default: 60, 需搭配 --loop)")
     args = parser.parse_args()
 
     NORMAL_QTY = str(args.qty)
